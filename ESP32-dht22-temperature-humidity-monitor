@@ -1,0 +1,138 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <DHT.h>
+#include <LiquidCrystal_I2C.h>
+
+// ─── Pin & sensor config ───────────────────────────
+#define DHTPIN    4
+#define DHTTYPE   DHT22
+
+// ─── WiFi (Wokwi built-in, no password needed) ────
+const char* ssid     = "Wokwi-GUEST";
+const char* password = "";
+
+// ─── Objects ──────────────────────────────────────
+DHT dht(DHTPIN, DHTTYPE);
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+WebServer server(80);
+
+// ─── Global sensor values ─────────────────────────
+float temperature = 0;
+float humidity    = 0;
+float heatIndex   = 0;
+
+// ─── Web page served at ESP32's IP ────────────────
+void handleRoot() {
+  String html = "<!DOCTYPE html><html><head>"
+    "<meta http-equiv='refresh' content='3'>"
+    "<title>ESP32 Monitor</title>"
+    "<style>"
+    "  body { font-family: monospace; background:#0d1117;"
+    "         color:#e6edf3; padding:30px; }"
+    "  h1   { color:#16a34a; }"
+    "  .box { background:#161b22; border:1px solid #30363d;"
+    "         border-radius:8px; padding:16px; margin:10px 0;"
+    "         font-size:1.4em; }"
+    "  .t   { color:#ef4444; }"
+    "  .h   { color:#3b82f6; }"
+    "  .hi  { color:#f97316; }"
+    "</style></head><body>"
+    "<h1>ESP32 Temp &amp; Humidity Monitor</h1>"
+    "<div class='box t'>Temperature: " + String(temperature, 1) + " &deg;C"
+    " (" + String(temperature * 9/5 + 32, 1) + " &deg;F)</div>"
+    "<div class='box h'>Humidity: "    + String(humidity, 1)    + " %</div>"
+    "<div class='box hi'> Heat Index: " + String(heatIndex, 1)   + " &deg;C</div>"
+    "<p style='color:#8b949e;font-size:0.8em;'>Auto-refreshes every 3 seconds</p>"
+    "</body></html>";
+  server.send(200, "text/html", html);
+}
+
+// ─── JSON endpoint (useful for IoT / fetch API) ───
+void handleJSON() {
+  String json = "{\"temperature\":" + String(temperature, 1) +
+                ",\"humidity\":"    + String(humidity, 1)    +
+                ",\"heatIndex\":"   + String(heatIndex, 1)   + "}";
+  server.send(200, "application/json", json);
+}
+
+// ─── Setup ────────────────────────────────────────
+void setup() {
+  Serial.begin(115200);
+  Serial.println("\nESP32 DHT22 Monitor starting...");
+
+  // Init LCD
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Connecting WiFi");
+
+  // Init DHT
+  dht.begin();
+
+  // Connect WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nConnected!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  // Show IP on LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("IP:");
+  lcd.setCursor(0, 1);
+  lcd.print(WiFi.localIP());
+  delay(3000);
+
+  // Start web server
+  server.on("/",     handleRoot);
+  server.on("/json", handleJSON);
+  server.begin();
+  Serial.println("Web server started on port 80");
+}
+
+// ─── Loop ─────────────────────────────────────────
+void loop() {
+  server.handleClient();   // Handle web requests
+
+  delay(2000);             // DHT22 needs 2s between reads
+
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+
+  // Sensor error check
+  if (isnan(h) || isnan(t)) {
+    Serial.println("ERROR: DHT22 read failed!");
+    lcd.setCursor(0, 0);
+    lcd.print("Sensor Error!   ");
+    lcd.setCursor(0, 1);
+    lcd.print("Check wiring... ");
+    return;
+  }
+
+  // Update globals
+  temperature = t;
+  humidity    = h;
+  heatIndex   = dht.computeHeatIndex(t, h, false);
+
+  // LCD display
+  lcd.setCursor(0, 0);
+  lcd.print("T:");
+  lcd.print(temperature, 1);
+  lcd.print((char)223);    // degree symbol
+  lcd.print("C       ");
+
+  lcd.setCursor(0, 1);
+  lcd.print("H:");
+  lcd.print(humidity, 1);
+  lcd.print("% RH    ");
+
+  // Serial monitor output
+  Serial.printf("Temp: %.1f C  |  Humidity: %.1f %%  |  Heat Index: %.1f C\n",
+                temperature, humidity, heatIndex);
+}
